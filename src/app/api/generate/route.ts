@@ -1,36 +1,52 @@
 import { NextResponse } from "next/server";
-
-
 import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const BodySchema = z.object({
   jobDescription: z.string().min(50),
   baseResume: z.string().min(50),
-  targetRole: z.string().min(2).optional(),
   tone: z.enum(["professional", "confident", "concise"]).default("professional"),
+  secret: z.string().min(1),
+  targetRole: z.string().optional(),
 });
 
-export async function POST(req: Request) {
+export async function POST(request: Request) {
   try {
+    // Ensure secrets exist on the server
     if (!process.env.ANTHROPIC_API_KEY) {
       return NextResponse.json(
-        { error: "Missing ANTHROPIC_API_KEY in .env.local" },
+        { error: "Missing ANTHROPIC_API_KEY (set it in Vercel env vars)" },
         { status: 500 }
       );
     }
 
-    const body = BodySchema.parse(await req.json());
+    if (!process.env.APP_SECRET) {
+      return NextResponse.json(
+        { error: "Missing APP_SECRET (set it in Vercel env vars)" },
+        { status: 500 }
+      );
+    }
+
+    const body = BodySchema.parse(await request.json());
+
+    // Hard auth gate (prevents strangers burning credits)
+    if (body.secret !== process.env.APP_SECRET) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     // basic size guards to avoid runaway token costs
-if (body.jobDescription.length > 15000) {
-  return NextResponse.json({ error: "Job description too long" }, { status: 400 });
-}
-if (body.baseResume.length > 15000) {
-  return NextResponse.json({ error: "Base resume too long" }, { status: 400 });
-}
+    if (body.jobDescription.length > 15000) {
+      return NextResponse.json({ error: "Job description too long" }, { status: 400 });
+    }
+    if (body.baseResume.length > 15000) {
+      return NextResponse.json({ error: "Base resume too long" }, { status: 400 });
+    }
+
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    // IMPORTANT: set this to a model that exists for your account.
+    // Use the same one that worked when you tested earlier (e.g. "claude-3-haiku-20240307").
+    const MODEL = "claude-3-haiku-20240307";
 
     const system = `
 You are a resume writer.
@@ -60,24 +76,21 @@ Now produce the tailored resume in Markdown.
 `.trim();
 
     const msg = await client.messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model: MODEL,
       max_tokens: 1600,
       temperature: 0.3,
       system,
       messages: [{ role: "user", content: user }],
     });
 
-    const text =
+    const draft =
       msg.content
         .filter((c: any) => c.type === "text")
         .map((c: any) => c.text)
         .join("\n") || "";
 
-   const draft = text;
-
-// ---------- STRICT RESUME AUDITOR (second pass) ----------
-
-const auditSystem = `
+    // ---------- STRICT RESUME AUDITOR (second pass) ----------
+    const auditSystem = `
 You are a strict resume auditor.
 
 Rules:
@@ -88,7 +101,7 @@ Rules:
 - Return only the corrected resume in Markdown.
 `.trim();
 
-const auditUser = `
+    const auditUser = `
 BASE RESUME:
 ${body.baseResume}
 
@@ -98,23 +111,21 @@ ${draft}
 Return the corrected resume in Markdown only.
 `.trim();
 
-const auditedMsg = await client.messages.create({
-  model: "claude-sonnet-4-5-20250929",
-  max_tokens: 1600,
-  temperature: 0.1,
-  system: auditSystem,
-  messages: [{ role: "user", content: auditUser }],
-});
+    const auditedMsg = await client.messages.create({
+      model: MODEL,
+      max_tokens: 1600,
+      temperature: 0.1,
+      system: auditSystem,
+      messages: [{ role: "user", content: auditUser }],
+    });
 
-const auditedText =
-  auditedMsg.content
-    .filter((c: any) => c.type === "text")
-    .map((c: any) => c.text)
-    .join("\n") || "";
+    const auditedText =
+      auditedMsg.content
+        .filter((c: any) => c.type === "text")
+        .map((c: any) => c.text)
+        .join("\n") || "";
 
-// ---------------------------------------------------------
-
-return NextResponse.json({ resumeMarkdown: auditedText });
+    return NextResponse.json({ resumeMarkdown: auditedText });
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message ?? "Unknown error" },
