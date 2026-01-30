@@ -11,17 +11,26 @@ export default function Home() {
   const [out, setOut] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [secret, setSecret] = useState("");
 
   async function generate() {
     setErr("");
     setOut("");
     setLoading(true);
+
+    if (!secret.trim()) {
+      setErr("Enter access key");
+      setLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobDescription, baseResume, tone }),
+        body: JSON.stringify({ jobDescription, baseResume, tone, secret }),
       });
+
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed");
       setOut(data.resumeMarkdown);
@@ -35,6 +44,17 @@ export default function Home() {
   return (
     <main className="max-w-3xl mx-auto p-6 space-y-4">
       <h1 className="text-2xl font-bold">Resume Generator (Personal Claude)</h1>
+
+      <div className="space-y-2">
+        <label className="font-medium">Access key</label>
+        <input
+          className="w-full border rounded p-2"
+          type="password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          placeholder="Enter access key..."
+        />
+      </div>
 
       <div className="space-y-2">
         <label className="font-medium">Job Description</label>
